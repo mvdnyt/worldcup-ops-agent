@@ -6,6 +6,7 @@ from google.cloud import pubsub_v1
 from google import genai
 from google.genai import types
 from dotenv import load_dotenv
+from agent.classifier import classify_incident, get_match_context
 
 load_dotenv()
 
@@ -156,17 +157,23 @@ def execute_action(alert, decision):
     action = decision.get("recommended_action")
     requires_approval = decision.get("requires_human_approval", False)
 
+    # Skip if no valid decision
+    if not action or action == "None":
+        print(f"⚠️  No valid action determined, escalating to human")
+        action = "ESCALATE_HUMAN"
+        requires_approval = True
+
     print(f"\n{'='*60}")
     print(f"🤖 AGENT DECISION")
     print(f"{'='*60}")
-    print(f"📊 Assessment: {decision.get('assessment')}")
-    print(f"⚠️  Risk Level: {decision.get('risk_level')}")
+    print(f"📊 Assessment: {decision.get('assessment', 'N/A')}")
+    print(f"⚠️  Risk Level: {decision.get('risk_level', 'N/A')}")
     print(f"🎯 Action: {action}")
-    print(f"📋 Details: {decision.get('action_details')}")
-    print(f"🧠 Reasoning: {decision.get('reasoning')}")
-    print(f"⏱️  Resolution: {decision.get('estimated_resolution_time')}")
+    print(f"📋 Details: {decision.get('action_details', 'N/A')}")
+    print(f"🧠 Reasoning: {decision.get('reasoning', 'N/A')}")
+    print(f"⏱️  Resolution: {decision.get('estimated_resolution_time', 'N/A')}")
 
-    if requires_approval:
+    if requires_approval and not alert.get('auto_handle', False):
         print(f"\n👤 WAITING FOR HUMAN APPROVAL...")
         print(f"   Press ENTER to approve or type 'reject' to reject: ", end="")
         user_input = input().strip().lower()
@@ -197,10 +204,20 @@ def callback(message):
     alerts = check_alerts(data)
 
     if alerts:
+        context = get_match_context()
         for alert in alerts:
-            print(f"\n🚨 ALERT DETECTED: {alert['message']}")
-            decision = analyze_alert(alert)
-            execute_action(alert, decision)
+            # Run through classifier first
+            classified = classify_incident(alert, context)
+            
+            print(f"\n🚨 ALERT: {classified['message']}")
+            print(f"📊 Severity Score: {classified['severity_score']} → {classified['severity_class']}")
+            print(f"🔍 Factors: {', '.join(classified['severity_factors'])}")
+            
+            if classified['auto_handle']:
+                print(f"⚡ AUTO-HANDLING (no human approval needed)")
+            
+            decision = analyze_alert(classified)
+            execute_action(classified, decision)
     else:
         if data["type"] == "crowd":
             print(f"✅ Normal: {data['gate']} density {data['density_percent']}%")
